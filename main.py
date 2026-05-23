@@ -15,8 +15,8 @@ app = FastAPI(title="AI Research Assistant")
 
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-chroma_client = chromadb.Client()
-collection = chroma_client.create_collection(name="research_papers")
+chroma_client = chromadb.PersistentClient(path="chroma_db")
+collection = chroma_client.get_or_create_collection(name="research_papers")
 
 # --- Helpers ---
 def extract_text(file_bytes):
