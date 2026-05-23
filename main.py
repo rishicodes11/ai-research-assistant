@@ -29,7 +29,11 @@ def extract_text(file_bytes):
     return text
 
 def chunk_text(text):
-    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=500,
+        chunk_overlap=100,
+        separators=["\n\n", "\n", ". ", "! ", "? ", ", ", " ", ""]
+    )
     return splitter.split_text(text)
 
 def get_embedding(text):
