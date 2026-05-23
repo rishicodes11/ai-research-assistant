@@ -1,3 +1,4 @@
+from collections import defaultdict
 from fastapi import FastAPI, UploadFile, File
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
@@ -17,6 +18,7 @@ embedder = SentenceTransformer("all-MiniLM-L6-v2")
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 chroma_client = chromadb.PersistentClient(path="chroma_db")
 collection = chroma_client.get_or_create_collection(name="research_papers")
+chat_histories = defaultdict(list)
 
 # --- Helpers ---
 def extract_text(file_bytes):
@@ -70,6 +72,7 @@ async def upload_pdf(file: UploadFile = File(...)):
 
 class QuestionRequest(BaseModel):
     question: str
+    session_id: str = "default"
 
 @app.post("/ask")
 def ask(request: QuestionRequest):
@@ -78,6 +81,11 @@ def ask(request: QuestionRequest):
     for i, (doc, meta) in enumerate(results):
         context += f"[{i+1}] Source: {meta['source']}\n{doc}\n\n"
 
+    history = chat_histories[request.session_id]
+    history_text = ""
+    for msg in history[-6:]:
+        history_text += f"{msg['role'].upper()}: {msg['content']}\n"
+
     prompt = f"""You are a research assistant.
 Answer the question using ONLY the context below.
 Add citations like [1], [2], [3] after each claim.
@@ -85,6 +93,9 @@ If the answer is not in the context, say "I don't know based on the documents."
 
 Context:
 {context}
+
+Previous conversation:
+{history_text}
 
 Question: {request.question}
 
@@ -96,10 +107,14 @@ Answer:"""
     )
 
     answer = response.choices[0].message.content
-    sources = [{"index": i+1, "source": meta['source'], "chunk": meta['chunk_index'], "preview": doc[:100]} 
+
+    chat_histories[request.session_id].append({"role": "user", "content": request.question})
+    chat_histories[request.session_id].append({"role": "assistant", "content": answer})
+
+    sources = [{"index": i+1, "source": meta['source'], "chunk": meta['chunk_index'], "preview": doc[:100]}
                for i, (doc, meta) in enumerate(results)]
 
-    return {"answer": answer, "sources": sources}
+    return {"answer": answer, "sources": sources, "session_id": request.session_id}
 
 class TopicRequest(BaseModel):
     topic: str
