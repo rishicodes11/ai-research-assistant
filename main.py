@@ -65,6 +65,14 @@ def home():
 
 @app.post("/upload")
 async def upload_pdf(file: UploadFile = File(...)):
+    # Check if already uploaded
+    existing = collection.get(where={"source": file.filename})
+    if existing and len(existing["ids"]) > 0:
+        return {
+            "message": f"{file.filename} already exists!",
+            "chunks": len(existing["ids"])
+        }
+
     contents = await file.read()
     text = extract_text(contents)
     chunks = chunk_text(text)
@@ -73,6 +81,24 @@ async def upload_pdf(file: UploadFile = File(...)):
         "message": f"Successfully loaded {file.filename}",
         "chunks": len(chunks)
     }
+
+@app.get("/documents")
+def list_documents():
+    results = collection.get()
+    if not results["ids"]:
+        return {"documents": []}
+    
+    sources = list(set([meta["source"] for meta in results["metadatas"]]))
+    return {"documents": sources, "total": len(sources)}
+
+@app.delete("/documents/{filename}")
+def delete_document(filename: str):
+    existing = collection.get(where={"source": filename})
+    if not existing or len(existing["ids"]) == 0:
+        return {"message": f"{filename} not found!"}
+    
+    collection.delete(where={"source": filename})
+    return {"message": f"{filename} deleted successfully!"}
 
 class QuestionRequest(BaseModel):
     question: str
