@@ -1,3 +1,4 @@
+from sentence_transformers import CrossEncoder
 from collections import defaultdict
 from fastapi import FastAPI, UploadFile, File
 from pydantic import BaseModel
@@ -15,6 +16,7 @@ load_dotenv()
 app = FastAPI(title="AI Research Assistant")
 
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
+reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 chroma_client = chromadb.PersistentClient(path="chroma_db")
 collection = chroma_client.get_or_create_collection(name="research_papers")
@@ -73,12 +75,23 @@ Rewritten question:"""
 
 def search(query, n_results=3):
     query_embedding = get_embedding(query)
+    # Retrieve more candidates first
     results = collection.query(
         query_embeddings=[query_embedding],
-        n_results=n_results,
+        n_results=10,
         include=["documents", "metadatas"]
     )
-    return list(zip(results['documents'][0], results['metadatas'][0]))
+    docs = results['documents'][0]
+    metas = results['metadatas'][0]
+
+    # Rerank
+    pairs = [[query, doc] for doc in docs]
+    scores = reranker.predict(pairs)
+    ranked = sorted(zip(scores, docs, metas), reverse=True)
+
+    # Return top 3
+    top = ranked[:n_results]
+    return [(doc, meta) for _, doc, meta in top]
 
 # --- Routes ---
 @app.get("/")
