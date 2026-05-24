@@ -48,6 +48,28 @@ def store_chunks(chunks, source_name):
             ids=[f"{source_name}_chunk_{i}"],
             metadatas=[{"source": source_name, "chunk_index": i}]
         )
+def rewrite_query(question, chat_history):
+    if not chat_history:
+        return question
+    
+    history_text = ""
+    for msg in chat_history[-4:]:
+        history_text += f"{msg['role'].upper()}: {msg['content']}\n"
+    
+    prompt = f"""Given this conversation history and the user's latest question, rewrite the question to be more specific and self-contained for document search. Return ONLY the rewritten question, nothing else.
+
+Conversation history:
+{history_text}
+
+Latest question: {question}
+
+Rewritten question:"""
+
+    response = groq_client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content.strip()
 
 def search(query, n_results=3):
     query_embedding = get_embedding(query)
@@ -106,7 +128,8 @@ class QuestionRequest(BaseModel):
 
 @app.post("/ask")
 def ask(request: QuestionRequest):
-    results = search(request.question)
+    rewritten = rewrite_query(request.question, chat_histories[request.session_id])
+    results = search(rewritten)
     context = ""
     for i, (doc, meta) in enumerate(results):
         context += f"[{i+1}] Source: {meta['source']}\n{doc}\n\n"
@@ -144,7 +167,7 @@ Answer:"""
     sources = [{"index": i+1, "source": meta['source'], "chunk": meta['chunk_index'], "preview": doc[:100]}
                for i, (doc, meta) in enumerate(results)]
 
-    return {"answer": answer, "sources": sources, "session_id": request.session_id}
+    return {"answer": answer, "sources": sources, "session_id": request.session_id, "rewritten_query": rewritten}
 
 class TopicRequest(BaseModel):
     topic: str
