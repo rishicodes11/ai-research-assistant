@@ -1,3 +1,4 @@
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from sentence_transformers import CrossEncoder
 from collections import defaultdict
 from fastapi import FastAPI, UploadFile, File
@@ -113,24 +114,45 @@ def home():
 
 @app.post("/upload")
 async def upload_pdf(file: UploadFile = File(...)):
-    # Check if already uploaded
-    existing = collection.get(where={"source": file.filename})
-    if existing and len(existing["ids"]) > 0:
+    # Check file type
+    if not file.filename.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+    
+    try:
+        # Check duplicate
+        existing = collection.get(where={"source": file.filename})
+        if existing and len(existing["ids"]) > 0:
+            return {
+                "message": f"{file.filename} already exists!",
+                "chunks": len(existing["ids"])
+            }
+
+        contents = await file.read()
+
+        # Check file size (max 10MB)
+        if len(contents) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="File too large. Max size is 10MB")
+
+        text = extract_text(contents)
+
+        # Check if text was extracted
+        if not text or len(text.strip()) < 50:
+            raise HTTPException(status_code=400, detail="Could not extract text from PDF. It may be a scanned image PDF")
+
+        chunks = chunk_text(text)
+        store_chunks(chunks, file.filename)
+        summary = summarize_document(text)
+
         return {
-            "message": f"{file.filename} already exists!",
-            "chunks": len(existing["ids"])
+            "message": f"Successfully loaded {file.filename}",
+            "chunks": len(chunks),
+            "summary": summary
         }
 
-    contents = await file.read()
-    text = extract_text(contents)
-    chunks = chunk_text(text)
-    store_chunks(chunks, file.filename)
-    summary = summarize_document(text)
-    return {
-        "message": f"Successfully loaded {file.filename}",
-        "chunks": len(chunks),
-        "summary": summary
-    }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing PDF: {str(e)}")
 
 @app.get("/documents")
 def list_documents():
@@ -156,18 +178,26 @@ class QuestionRequest(BaseModel):
 
 @app.post("/ask")
 def ask(request: QuestionRequest):
-    rewritten = rewrite_query(request.question, chat_histories[request.session_id])
-    results = search(rewritten)
-    context = ""
-    for i, (doc, meta) in enumerate(results):
-        context += f"[{i+1}] Source: {meta['source']}\n{doc}\n\n"
+    if not request.question.strip():
+        raise HTTPException(status_code=400, detail="Question cannot be empty")
+    
+    try:
+        rewritten = rewrite_query(request.question, chat_histories[request.session_id])
+        results = search(rewritten)
+        
+        if not results:
+            raise HTTPException(status_code=404, detail="No documents found. Please upload a PDF first")
 
-    history = chat_histories[request.session_id]
-    history_text = ""
-    for msg in history[-6:]:
-        history_text += f"{msg['role'].upper()}: {msg['content']}\n"
+        context = ""
+        for i, (doc, meta) in enumerate(results):
+            context += f"[{i+1}] Source: {meta['source']}\n{doc}\n\n"
 
-    prompt = f"""You are a research assistant.
+        history = chat_histories[request.session_id]
+        history_text = ""
+        for msg in history[-6:]:
+            history_text += f"{msg['role'].upper()}: {msg['content']}\n"
+
+        prompt = f"""You are a research assistant.
 Answer the question using ONLY the context below.
 Add citations like [1], [2], [3] after each claim.
 If the answer is not in the context, say "I don't know based on the documents."
@@ -182,20 +212,25 @@ Question: {request.question}
 
 Answer:"""
 
-    response = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}]
-    )
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}]
+        )
 
-    answer = response.choices[0].message.content
+        answer = response.choices[0].message.content
 
-    chat_histories[request.session_id].append({"role": "user", "content": request.question})
-    chat_histories[request.session_id].append({"role": "assistant", "content": answer})
+        chat_histories[request.session_id].append({"role": "user", "content": request.question})
+        chat_histories[request.session_id].append({"role": "assistant", "content": answer})
 
-    sources = [{"index": i+1, "source": meta['source'], "chunk": meta['chunk_index'], "preview": doc[:100]}
-               for i, (doc, meta) in enumerate(results)]
+        sources = [{"index": i+1, "source": meta['source'], "chunk": meta['chunk_index'], "preview": doc[:100]}
+                   for i, (doc, meta) in enumerate(results)]
 
-    return {"answer": answer, "sources": sources, "session_id": request.session_id, "rewritten_query": rewritten}
+        return {"answer": answer, "sources": sources, "session_id": request.session_id, "rewritten_query": rewritten}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating answer: {str(e)}")
 
 class TopicRequest(BaseModel):
     topic: str
