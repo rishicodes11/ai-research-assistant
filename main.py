@@ -1,3 +1,6 @@
+import logging
+import time
+from datetime import datetime
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from sentence_transformers import CrossEncoder
 from collections import defaultdict
@@ -11,6 +14,17 @@ import PyPDF2
 import chromadb
 import os
 import io
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    handlers=[
+        logging.FileHandler("app.log"),  # saves to file
+        logging.StreamHandler()           # shows in terminal
+    ]
+)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -114,14 +128,16 @@ def home():
 
 @app.post("/upload")
 async def upload_pdf(file: UploadFile = File(...)):
-    # Check file type
+    logger.info(f"Upload requested: {file.filename}")
+    
     if not file.filename.endswith(".pdf"):
+        logger.warning(f"Invalid file type: {file.filename}")
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
     
     try:
-        # Check duplicate
         existing = collection.get(where={"source": file.filename})
         if existing and len(existing["ids"]) > 0:
+            logger.info(f"Duplicate upload attempted: {file.filename}")
             return {
                 "message": f"{file.filename} already exists!",
                 "chunks": len(existing["ids"])
@@ -129,20 +145,21 @@ async def upload_pdf(file: UploadFile = File(...)):
 
         contents = await file.read()
 
-        # Check file size (max 10MB)
         if len(contents) > 10 * 1024 * 1024:
+            logger.warning(f"File too large: {file.filename}")
             raise HTTPException(status_code=400, detail="File too large. Max size is 10MB")
 
         text = extract_text(contents)
 
-        # Check if text was extracted
         if not text or len(text.strip()) < 50:
+            logger.warning(f"No text extracted from: {file.filename}")
             raise HTTPException(status_code=400, detail="Could not extract text from PDF. It may be a scanned image PDF")
 
         chunks = chunk_text(text)
         store_chunks(chunks, file.filename)
         summary = summarize_document(text)
 
+        logger.info(f"Successfully loaded: {file.filename} | chunks: {len(chunks)}")
         return {
             "message": f"Successfully loaded {file.filename}",
             "chunks": len(chunks),
@@ -152,6 +169,7 @@ async def upload_pdf(file: UploadFile = File(...)):
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error processing {file.filename}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing PDF: {str(e)}")
 
 @app.get("/documents")
@@ -178,6 +196,7 @@ class QuestionRequest(BaseModel):
 
 @app.post("/ask")
 def ask(request: QuestionRequest):
+    logger.info(f"Question received | session: {request.session_id} | question: {request.question}")
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
     
@@ -225,6 +244,7 @@ Answer:"""
         sources = [{"index": i+1, "source": meta['source'], "chunk": meta['chunk_index'], "preview": doc[:100]}
                    for i, (doc, meta) in enumerate(results)]
 
+        logger.info(f"Answer generated | session: {request.session_id} | rewritten: {rewritten}")
         return {"answer": answer, "sources": sources, "session_id": request.session_id, "rewritten_query": rewritten}
 
     except HTTPException:
