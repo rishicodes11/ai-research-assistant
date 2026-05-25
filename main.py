@@ -37,7 +37,20 @@ def chunk_text(text):
         separators=["\n\n", "\n", ". ", "! ", "? ", ", ", " ", ""]
     )
     return splitter.split_text(text)
+def summarize_document(text):
+    prompt = f"""Read this document and write a clear 2-3 sentence summary of what it's about.
+Be specific about the main topics covered.
 
+Document (first 3000 chars):
+{text[:3000]}
+
+Summary:"""
+
+    response = groq_client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content.strip()
 def get_embedding(text):
     return embedder.encode(text).tolist()
 
@@ -112,9 +125,11 @@ async def upload_pdf(file: UploadFile = File(...)):
     text = extract_text(contents)
     chunks = chunk_text(text)
     store_chunks(chunks, file.filename)
+    summary = summarize_document(text)
     return {
         "message": f"Successfully loaded {file.filename}",
-        "chunks": len(chunks)
+        "chunks": len(chunks),
+        "summary": summary
     }
 
 @app.get("/documents")
