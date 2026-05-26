@@ -1,10 +1,13 @@
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 import hashlib
 from rank_bm25 import BM25Okapi
 import math
 import logging
 import time
 from datetime import datetime
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from sentence_transformers import CrossEncoder
 from collections import defaultdict
 from fastapi import FastAPI, UploadFile, File
@@ -32,6 +35,10 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 app = FastAPI(title="AI Research Assistant")
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
 reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
@@ -210,7 +217,8 @@ def home():
     return {"message": "AI Research Assistant is running!"}
 
 @app.post("/upload")
-async def upload_pdf(file: UploadFile = File(...)):
+@limiter.limit("5/minute")
+async def upload_pdf(request: Request, file: UploadFile = File(...)):
     logger.info(f"Upload requested: {file.filename}")
     
     if not file.filename.endswith(".pdf"):
@@ -278,21 +286,22 @@ class QuestionRequest(BaseModel):
     session_id: str = "default"
 
 @app.post("/ask")
-def ask(request: QuestionRequest):
-    logger.info(f"Question received | session: {request.session_id} | question: {request.question}")
-    if not request.question.strip():
+@limiter.limit("10/minute")
+def ask(request_data: QuestionRequest, request: Request):
+    logger.info(f"Question received | session: {request_data.session_id} | question: {request_data.question}")
+    if not request_data.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
     
     # Check cache
-    cache_key = get_cache_key(request.question, request.session_id)
+    cache_key = get_cache_key(request_data.question, request_data.session_id)
     if cache_key in answer_cache:
-     logger.info(f"Cache hit | session: {request.session_id}")
+     logger.info(f"Cache hit | session: {request_data.session_id}")
      cached_response = answer_cache[cache_key].copy()
      cached_response["cached"] = True
      return cached_response
     
     try:
-        rewritten = rewrite_query(request.question, chat_histories[request.session_id])
+        rewritten = rewrite_query(request_data.question, chat_histories[request_data.session_id])
         results, confidence, confidence_score = hybrid_search(rewritten)
         
         if not results:
@@ -302,7 +311,7 @@ def ask(request: QuestionRequest):
         for i, (doc, meta) in enumerate(results):
             context += f"[{i+1}] Source: {meta['source']}\n{doc}\n\n"
 
-        history = chat_histories[request.session_id]
+        history = chat_histories[request_data.session_id]
         history_text = ""
         for msg in history[-6:]:
             history_text += f"{msg['role'].upper()}: {msg['content']}\n"
@@ -318,7 +327,7 @@ Context:
 Previous conversation:
 {history_text}
 
-Question: {request.question}
+Question: {request_data.question}
 
 Answer:"""
 
@@ -329,21 +338,21 @@ Answer:"""
 
         answer = response.choices[0].message.content
 
-        chat_histories[request.session_id].append({"role": "user", "content": request.question})
-        chat_histories[request.session_id].append({"role": "assistant", "content": answer})
+        chat_histories[request_data.session_id].append({"role": "user", "content": request_data.question})
+        chat_histories[request_data.session_id].append({"role": "assistant", "content": answer})
 
         sources = [{"index": i+1, "source": meta['source'], "chunk": meta['chunk_index'], "preview": doc[:100]}
                    for i, (doc, meta) in enumerate(results)]
 
-        logger.info(f"Answer generated | session: {request.session_id} | rewritten: {rewritten}")
+        logger.info(f"Answer generated | session: {request_data.session_id} | rewritten: {rewritten}")
 
         # Save to cache
         if len(answer_cache) >= CACHE_MAX_SIZE:
          oldest_key = next(iter(answer_cache))
          del answer_cache[oldest_key]
-        answer_cache[cache_key] = {"answer": answer, "confidence": confidence, "confidence_score": round(confidence_score, 3), "sources": sources, "session_id": request.session_id, "rewritten_query": rewritten, "cached": False}
+        answer_cache[cache_key] = {"answer": answer, "confidence": confidence, "confidence_score": round(confidence_score, 3), "sources": sources, "session_id": request_data.session_id, "rewritten_query": rewritten, "cached": False}
 
-        return {"answer": answer, "confidence": confidence,"confidence_score": round(confidence_score, 3), "sources": sources, "session_id": request.session_id, "rewritten_query": rewritten,"cached": False}
+        return {"answer": answer, "confidence": confidence,"confidence_score": round(confidence_score, 3), "sources": sources, "session_id": request_data.session_id, "rewritten_query": rewritten,"cached": False}
 
     except HTTPException:
         raise
