@@ -1,3 +1,4 @@
+import hashlib
 from rank_bm25 import BM25Okapi
 import math
 import logging
@@ -38,6 +39,8 @@ groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 chroma_client = chromadb.PersistentClient(path="chroma_db")
 collection = chroma_client.get_or_create_collection(name="research_papers")
 chat_histories = defaultdict(list)
+answer_cache = {}
+CACHE_MAX_SIZE = 100
 
 # --- Helpers ---
 def extract_text(file_bytes):
@@ -196,6 +199,11 @@ def hybrid_search(query, n_results=3):
         confidence = "Low"
 
     return [(doc, meta) for _, doc, meta in final], confidence, confidence_pct
+
+def get_cache_key(question, session_id):
+    content = f"{question.strip().lower()}_{session_id}"
+    return hashlib.md5(content.encode()).hexdigest()
+
 # --- Routes ---
 @app.get("/")
 def home():
@@ -275,6 +283,14 @@ def ask(request: QuestionRequest):
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
     
+    # Check cache
+    cache_key = get_cache_key(request.question, request.session_id)
+    if cache_key in answer_cache:
+     logger.info(f"Cache hit | session: {request.session_id}")
+     cached_response = answer_cache[cache_key].copy()
+     cached_response["cached"] = True
+     return cached_response
+    
     try:
         rewritten = rewrite_query(request.question, chat_histories[request.session_id])
         results, confidence, confidence_score = hybrid_search(rewritten)
@@ -320,7 +336,14 @@ Answer:"""
                    for i, (doc, meta) in enumerate(results)]
 
         logger.info(f"Answer generated | session: {request.session_id} | rewritten: {rewritten}")
-        return {"answer": answer, "confidence": confidence,"confidence_score": round(confidence_score, 3), "sources": sources, "session_id": request.session_id, "rewritten_query": rewritten}
+
+        # Save to cache
+        if len(answer_cache) >= CACHE_MAX_SIZE:
+         oldest_key = next(iter(answer_cache))
+         del answer_cache[oldest_key]
+        answer_cache[cache_key] = {"answer": answer, "confidence": confidence, "confidence_score": round(confidence_score, 3), "sources": sources, "session_id": request.session_id, "rewritten_query": rewritten, "cached": False}
+
+        return {"answer": answer, "confidence": confidence,"confidence_score": round(confidence_score, 3), "sources": sources, "session_id": request.session_id, "rewritten_query": rewritten,"cached": False}
 
     except HTTPException:
         raise
