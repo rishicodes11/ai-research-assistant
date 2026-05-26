@@ -1,3 +1,4 @@
+import math
 import logging
 import time
 from datetime import datetime
@@ -103,7 +104,6 @@ Rewritten question:"""
 
 def search(query, n_results=3):
     query_embedding = get_embedding(query)
-    # Retrieve more candidates first
     results = collection.query(
         query_embeddings=[query_embedding],
         n_results=10,
@@ -112,15 +112,25 @@ def search(query, n_results=3):
     docs = results['documents'][0]
     metas = results['metadatas'][0]
 
-    # Rerank
     pairs = [[query, doc] for doc in docs]
     scores = reranker.predict(pairs)
-    ranked = sorted(zip(scores, docs, metas), reverse=True)
+    ranked = sorted(zip(scores, docs, metas), key=lambda x: x[0], reverse=True)
 
-    # Return top 3
     top = ranked[:n_results]
-    return [(doc, meta) for _, doc, meta in top]
+    top_score = float(top[0][0])
 
+    # Convert to 0-100% using sigmoid
+    confidence_pct = round(1 / (1 + math.exp(-top_score / 3)) * 100, 1)
+
+    if confidence_pct > 70:
+     confidence = "High"
+    elif confidence_pct > 45:
+     confidence = "Medium"
+    else:
+     confidence = "Low"
+
+    
+    return [(doc, meta) for _, doc, meta in top], confidence, confidence_pct
 # --- Routes ---
 @app.get("/")
 def home():
@@ -202,7 +212,7 @@ def ask(request: QuestionRequest):
     
     try:
         rewritten = rewrite_query(request.question, chat_histories[request.session_id])
-        results = search(rewritten)
+        results, confidence, confidence_score = search(rewritten)
         
         if not results:
             raise HTTPException(status_code=404, detail="No documents found. Please upload a PDF first")
@@ -245,7 +255,7 @@ Answer:"""
                    for i, (doc, meta) in enumerate(results)]
 
         logger.info(f"Answer generated | session: {request.session_id} | rewritten: {rewritten}")
-        return {"answer": answer, "sources": sources, "session_id": request.session_id, "rewritten_query": rewritten}
+        return {"answer": answer, "confidence": confidence,"confidence_score": round(confidence_score, 3), "sources": sources, "session_id": request.session_id, "rewritten_query": rewritten}
 
     except HTTPException:
         raise
@@ -257,7 +267,7 @@ class TopicRequest(BaseModel):
 
 @app.post("/synthesize")
 def synthesize(request: TopicRequest):
-    results = search(request.topic, n_results=5)
+    results, _, _ = search(request.topic, n_results=5)
     context = "\n\n".join([f"[From: {meta['source']}]\n{doc}" for doc, meta in results])
 
     prompt = f"""You are a research assistant. Generate a structured synthesis on the topic.
