@@ -216,6 +216,23 @@ def get_cache_key(question, session_id):
 def home():
     return {"message": "AI Research Assistant is running!"}
 
+@app.get("/health")
+def health_check():
+    try:
+        doc_count = len(collection.get()["ids"])
+        return {
+            "status": "healthy",
+            "documents_loaded": doc_count,
+            "cache_size": len(answer_cache),
+            "model": "llama-3.3-70b-versatile",
+            "embedding_model": "all-MiniLM-L6-v2"
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "error": str(e)
+        }
+
 @app.post("/upload")
 @limiter.limit("5/minute")
 async def upload_pdf(request: Request, file: UploadFile = File(...)):
