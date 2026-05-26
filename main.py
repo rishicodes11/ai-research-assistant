@@ -1,3 +1,4 @@
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -55,6 +56,7 @@ collection = chroma_client.get_or_create_collection(name="research_papers")
 chat_histories = defaultdict(list)
 answer_cache = {}
 CACHE_MAX_SIZE = 100
+processing_jobs = {}
 
 # --- Helpers ---
 def extract_text(file_bytes):
@@ -97,6 +99,38 @@ def store_chunks(chunks, source_name):
             ids=[f"{source_name}_chunk_{i}"],
             metadatas=[{"source": source_name, "chunk_index": i}]
         )
+
+def process_pdf_background(job_id: str, file_bytes: bytes, filename: str):
+    try:
+        processing_jobs[job_id] = {"status": "processing", "filename": filename}
+        
+        text = extract_text(file_bytes)
+        if not text or len(text.strip()) < 50:
+            processing_jobs[job_id] = {
+                "status": "failed",
+                "error": "Could not extract text from PDF"
+            }
+            return
+
+        chunks = chunk_text(text)
+        store_chunks(chunks, filename)
+        summary = summarize_document(text)
+
+        processing_jobs[job_id] = {
+            "status": "complete",
+            "filename": filename,
+            "chunks": len(chunks),
+            "summary": summary
+        }
+        logger.info(f"Background processing complete: {filename}")
+
+    except Exception as e:
+        processing_jobs[job_id] = {
+            "status": "failed",
+            "error": str(e)
+        }
+        logger.error(f"Background processing failed: {filename} | {str(e)}")
+
 def rewrite_query(question, chat_history):
     if not chat_history:
         return question
@@ -286,6 +320,44 @@ async def upload_pdf(request: Request, file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"Error processing {file.filename}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error processing PDF: {str(e)}")
+
+
+@app.post("/upload/async")
+@limiter.limit("5/minute")
+async def upload_pdf_async(request: Request, background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    if not file.filename.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+
+    # Check duplicate
+    existing = collection.get(where={"source": file.filename})
+    if existing and len(existing["ids"]) > 0:
+        return {"message": f"{file.filename} already exists!", "status": "duplicate"}
+
+    contents = await file.read()
+
+    if len(contents) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large. Max size is 10MB")
+
+    # Generate job ID
+    import uuid
+    job_id = str(uuid.uuid4())
+    processing_jobs[job_id] = {"status": "queued", "filename": file.filename}
+
+    # Add to background
+    background_tasks.add_task(process_pdf_background, job_id, contents, file.filename)
+
+    logger.info(f"Async upload queued: {file.filename} | job_id: {job_id}")
+    return {
+        "message": "PDF queued for processing!",
+        "job_id": job_id,
+        "status": "queued"
+    }
+
+@app.get("/status/{job_id}")
+def get_job_status(job_id: str):
+    if job_id not in processing_jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return processing_jobs[job_id]
 
 @app.get("/documents")
 def list_documents():
