@@ -1,3 +1,5 @@
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -38,7 +40,12 @@ app = FastAPI(title="AI Research Assistant")
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
 reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
@@ -375,6 +382,68 @@ Answer:"""
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating answer: {str(e)}")
+
+@app.post("/ask/stream")
+@limiter.limit("10/minute")
+async def ask_stream(request_data: QuestionRequest, request: Request):
+    if not request_data.question.strip():
+        raise HTTPException(status_code=400, detail="Question cannot be empty")
+
+    try:
+        rewritten = rewrite_query(request_data.question, chat_histories[request_data.session_id])
+        results, confidence, confidence_score = hybrid_search(rewritten)
+
+        if not results:
+            raise HTTPException(status_code=404, detail="No documents found. Please upload a PDF first")
+
+        context = ""
+        for i, (doc, meta) in enumerate(results):
+            context += f"[{i+1}] Source: {meta['source']}\n{doc}\n\n"
+
+        history = chat_histories[request_data.session_id]
+        history_text = ""
+        for msg in history[-6:]:
+            history_text += f"{msg['role'].upper()}: {msg['content']}\n"
+
+        prompt = f"""You are a research assistant.
+Answer the question using ONLY the context below.
+Add citations like [1], [2], [3] after each claim.
+If the answer is not in the context, say "I don't know based on the documents."
+
+Context:
+{context}
+
+Previous conversation:
+{history_text}
+
+Question: {request_data.question}
+
+Answer:"""
+
+        def generate():
+            full_answer = ""
+            stream = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                stream=True
+            )
+            for chunk in stream:
+                content = chunk.choices[0].delta.content
+                if content:
+                    full_answer += content
+                    yield content
+
+            # Save to history after streaming done
+            chat_histories[request_data.session_id].append({"role": "user", "content": request_data.question})
+            chat_histories[request_data.session_id].append({"role": "assistant", "content": full_answer})
+            logger.info(f"Stream complete | session: {request_data.session_id}")
+
+        return StreamingResponse(generate(), media_type="text/plain")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error streaming answer: {str(e)}")
 
 class TopicRequest(BaseModel):
     topic: str
