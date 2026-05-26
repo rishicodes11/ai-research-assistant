@@ -1,3 +1,4 @@
+from rank_bm25 import BM25Okapi
 import math
 import logging
 import time
@@ -131,6 +132,70 @@ def search(query, n_results=3):
 
     
     return [(doc, meta) for _, doc, meta in top], confidence, confidence_pct
+
+def hybrid_search(query, n_results=3):
+    # Step 1 — Get ALL documents from ChromaDB
+    all_docs = collection.get(include=["documents", "metadatas"])
+    if not all_docs["ids"]:
+        return [], "Low", 0.0
+
+    docs = all_docs["documents"]
+    metas = all_docs["metadatas"]
+
+    # Step 2 — Semantic search scores
+    query_embedding = get_embedding(query)
+    semantic_results = collection.query(
+        query_embeddings=[query_embedding],
+        n_results=min(10, len(docs)),
+        include=["documents", "metadatas"]
+    )
+    semantic_docs = semantic_results["documents"][0]
+
+    # Build semantic score map
+    semantic_scores = {}
+    for i, doc in enumerate(semantic_docs):
+        semantic_scores[doc] = 1 - (i / len(semantic_docs))
+
+    # Step 3 — BM25 keyword search scores
+    tokenized_docs = [doc.lower().split() for doc in docs]
+    bm25 = BM25Okapi(tokenized_docs)
+    tokenized_query = query.lower().split()
+    bm25_scores = bm25.get_scores(tokenized_query)
+
+    # Normalize BM25 scores to 0-1
+    max_bm25 = max(bm25_scores) if max(bm25_scores) > 0 else 1
+    normalized_bm25 = [score / max_bm25 for score in bm25_scores]
+
+    # Step 4 — Combine scores (50% semantic + 50% keyword)
+    combined = []
+    for i, doc in enumerate(docs):
+        semantic = semantic_scores.get(doc, 0)
+        keyword = normalized_bm25[i]
+        hybrid_score = 0.5 * semantic + 0.5 * keyword
+        combined.append((hybrid_score, doc, metas[i]))
+
+    # Step 5 — Sort by hybrid score
+    combined = sorted(combined, key=lambda x: x[0], reverse=True)
+    top = combined[:min(10, len(combined))]
+
+    # Step 6 — Rerank with cross encoder
+    pairs = [[query, doc] for _, doc, _ in top]
+    rerank_scores = reranker.predict(pairs)
+    reranked = sorted(zip(rerank_scores, [d for _, d, _ in top], [m for _, _, m in top]),
+                      key=lambda x: x[0], reverse=True)
+
+    final = reranked[:n_results]
+    top_score = float(final[0][0])
+
+    confidence_pct = round(1 / (1 + math.exp(-top_score / 3)) * 100, 1)
+    if confidence_pct > 70:
+        confidence = "High"
+    elif confidence_pct > 45:
+        confidence = "Medium"
+    else:
+        confidence = "Low"
+
+    return [(doc, meta) for _, doc, meta in final], confidence, confidence_pct
 # --- Routes ---
 @app.get("/")
 def home():
@@ -212,7 +277,7 @@ def ask(request: QuestionRequest):
     
     try:
         rewritten = rewrite_query(request.question, chat_histories[request.session_id])
-        results, confidence, confidence_score = search(rewritten)
+        results, confidence, confidence_score = hybrid_search(rewritten)
         
         if not results:
             raise HTTPException(status_code=404, detail="No documents found. Please upload a PDF first")
@@ -267,7 +332,7 @@ class TopicRequest(BaseModel):
 
 @app.post("/synthesize")
 def synthesize(request: TopicRequest):
-    results, _, _ = search(request.topic, n_results=5)
+    results, _, _ = hybrid_search(request.topic, n_results=5)
     context = "\n\n".join([f"[From: {meta['source']}]\n{doc}" for doc, meta in results])
 
     prompt = f"""You are a research assistant. Generate a structured synthesis on the topic.
