@@ -6476,3 +6476,15 @@
 2026-06-01 14:01:20,444 | INFO | Successfully loaded: receipt_Major project file (1).pdf | chunks: 2
 2026-06-01 14:01:42,869 | INFO | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
 2026-06-01 14:01:43,957 | INFO | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-03 17:11:44,691 | INFO | 2 changes detected
+2026-06-03 17:15:40,516 | INFO | Upload requested: resume.pdf
+2026-06-03 17:15:42,313 | INFO | 2 changes detected
+2026-06-03 17:15:43,279 | INFO | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-03 17:15:43,302 | INFO | Successfully loaded: resume.pdf | chunks: 5
+2026-06-03 17:16:26,896 | INFO | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-03 17:16:46,854 | INFO | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-03 17:16:48,400 | INFO | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-03 17:17:14,596 | INFO | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-03 17:17:15,779 | INFO | HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-06-03 17:24:39,937 | INFO | 1 change detected
+2026-06-03 17:25:09,562 | INFO | 1 change detected
