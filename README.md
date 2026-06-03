@@ -99,9 +99,25 @@ Current scores on test suite:
 
 ```
 research-assistant/
-├── main.py          # FastAPI application
-├── evaluate.py      # Evaluation metrics
-├── requirements.txt # Dependencies
-├── chroma_db/       # Persistent vector storage
-└── papers/          # PDF storage directory
+├── main.py                  # FastAPI app entry point
+├── requirements.txt         # Dependencies
+├── Procfile                 # Railway deployment config
+├── .env.example             # Environment variable reference
+├── evaluate.py              # IR evaluation metrics
+└── app/
+    ├── api/
+    │   └── routes.py        # All API endpoints
+    ├── services/
+    │   ├── embedding_service.py   # Sentence transformer embeddings
+    │   ├── retrieval_service.py   # Hybrid search (BM25 + semantic)
+    │   ├── rerank_service.py      # Cross-encoder reranking
+    │   └── llm_service.py         # Groq LLM calls
+    ├── db/
+    │   └── chroma_manager.py      # ChromaDB operations
+    ├── models/
+    │   └── schemas.py             # Pydantic request/response models
+    ├── utils/
+    │   └── chunking.py            # Text chunking
+    └── evaluation/
+        └── metrics.py             # Precision@K, MRR, NDCG
 ```
