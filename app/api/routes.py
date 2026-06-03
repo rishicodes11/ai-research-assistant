@@ -12,7 +12,6 @@ from app.services.llm_service import llm_service
 from app.db.chroma_manager import chroma_manager
 from app.utils.chunking import chunking_service
 from app.models.schemas import QuestionRequest, TopicRequest
-from app.services.retrieval_service import retrieval_service
 
 import PyPDF2
 import io
@@ -170,7 +169,7 @@ def ask(request_data: QuestionRequest, request: Request):
     if not request_data.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
 
-    cache_key = get_cache_key(request_data.question, request_data.session_id)
+    cache_key = get_cache_key(request_data.question, request_data.session_id) + ("_faith" if request_data.check_faithfulness else "")
     if cache_key in answer_cache:
         logger.info(f"Cache hit | session: {request_data.session_id}")
         cached_response = answer_cache[cache_key].copy()
@@ -204,9 +203,21 @@ def ask(request_data: QuestionRequest, request: Request):
             oldest_key = next(iter(answer_cache))
             del answer_cache[oldest_key]
 
-        response = {"answer": answer, "confidence": confidence, "confidence_score": round(confidence_score, 3),
-                    "sources": sources, "session_id": request_data.session_id,
-                    "rewritten_query": rewritten, "cached": False}
+        faithfulness_data = {}
+        if request_data.check_faithfulness:
+            faithfulness_data = llm_service.check_faithfulness(answer, context)
+
+        response = {
+            "answer": answer,
+            "confidence": confidence,
+            "confidence_score": round(confidence_score, 3),
+            "sources": sources,
+            "session_id": request_data.session_id,
+            "rewritten_query": rewritten,
+            "cached": False,
+            "faithfulness_score": faithfulness_data.get("faithfulness_score"),
+            "faithfulness_reason": faithfulness_data.get("faithfulness_reason")
+        }
         answer_cache[cache_key] = response
         return response
 

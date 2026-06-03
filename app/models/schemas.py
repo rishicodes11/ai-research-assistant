@@ -4,6 +4,7 @@ from typing import Optional
 class QuestionRequest(BaseModel):
     question: str
     session_id: str = "default"
+    check_faithfulness: bool = False
 
 class TopicRequest(BaseModel):
     topic: str
@@ -28,3 +29,5 @@ class AnswerResponse(BaseModel):
     session_id: str
     rewritten_query: str
     cached: bool
+    faithfulness_score: Optional[float] = None
+    faithfulness_reason: Optional[str] = None

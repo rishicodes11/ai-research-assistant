@@ -72,5 +72,36 @@ Question: {question}
 Answer:"""
         return self.generate(prompt)
 
+    def check_faithfulness(self, answer: str, context: str) -> dict:
+        prompt = f"""You are an expert fact checker for a research assistant system.
+
+Your job is to check if an answer is faithful to the given context.
+Faithful means: every claim in the answer can be found in the context.
+Unfaithful means: the answer contains facts not present in the context.
+
+Context:
+{context}
+
+Answer to check:
+{answer}
+
+Respond in this exact format and nothing else:
+score: [a number between 0 and 1, where 1 = completely faithful, 0 = completely hallucinated]
+reason: [one sentence explaining your score]
+
+Response:"""
+
+        try:
+            result = self.generate(prompt)
+            lines = result.strip().split("\n")
+            score_line = [l for l in lines if l.startswith("score:")][0]
+            reason_line = [l for l in lines if l.startswith("reason:")][0]
+            score = float(score_line.replace("score:", "").strip())
+            reason = reason_line.replace("reason:", "").strip()
+            score = max(0.0, min(1.0, score))
+            return {"faithfulness_score": round(score, 3), "faithfulness_reason": reason}
+        except Exception:
+            return {"faithfulness_score": None, "faithfulness_reason": "Could not evaluate faithfulness"}
+
 # Singleton instance
 llm_service = LLMService()
