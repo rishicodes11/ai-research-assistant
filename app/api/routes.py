@@ -12,6 +12,7 @@ from app.services.llm_service import llm_service
 from app.db.chroma_manager import chroma_manager
 from app.utils.chunking import chunking_service
 from app.models.schemas import QuestionRequest, TopicRequest
+from app.services.retrieval_service import retrieval_service
 
 import PyPDF2
 import io
@@ -51,6 +52,7 @@ def process_pdf_background(job_id: str, file_bytes: bytes, filename: str):
         chunks = chunking_service.chunk_text(text)
         embeddings = embedding_service.get_embeddings_batch(chunks)
         chroma_manager.add_chunks(chunks, embeddings, filename)
+        retrieval_service.invalidate_cache()
         summary = llm_service.summarize(text)
 
         processing_jobs[job_id] = {
@@ -108,6 +110,7 @@ async def upload_pdf(request: Request, file: UploadFile = File(...)):
         chunks = chunking_service.chunk_text(text)
         embeddings = embedding_service.get_embeddings_batch(chunks)
         chroma_manager.add_chunks(chunks, embeddings, file.filename)
+        retrieval_service.invalidate_cache()
         summary = llm_service.summarize(text)
 
         logger.info(f"Successfully loaded: {file.filename} | chunks: {len(chunks)}")
