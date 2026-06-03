@@ -49,7 +49,7 @@ def process_pdf_background(job_id: str, file_bytes: bytes, filename: str):
             return
 
         chunks = chunking_service.chunk_text(text)
-        embeddings = [embedding_service.get_embedding(chunk) for chunk in chunks]
+        embeddings = embedding_service.get_embeddings_batch(chunks)
         chroma_manager.add_chunks(chunks, embeddings, filename)
         summary = llm_service.summarize(text)
 
@@ -106,7 +106,7 @@ async def upload_pdf(request: Request, file: UploadFile = File(...)):
             raise HTTPException(status_code=400, detail="Could not extract text from PDF")
 
         chunks = chunking_service.chunk_text(text)
-        embeddings = [embedding_service.get_embedding(chunk) for chunk in chunks]
+        embeddings = embedding_service.get_embeddings_batch(chunks)
         chroma_manager.add_chunks(chunks, embeddings, file.filename)
         summary = llm_service.summarize(text)
 
