@@ -6,6 +6,12 @@ from fastapi.responses import StreamingResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
+from fastapi import Depends
+from app.auth.auth_handler import hash_password, verify_password, create_access_token
+from app.auth.auth_bearer import jwt_bearer
+from app.db.user_db import init_db, create_user, get_user_by_username, get_user_by_email
+from app.models.schemas import RegisterRequest, LoginRequest
+
 from app.services.embedding_service import embedding_service
 from app.services.retrieval_service import retrieval_service
 from app.services.llm_service import llm_service
@@ -83,10 +89,30 @@ def health_check():
         }
     except Exception as e:
         return {"status": "unhealthy", "error": str(e)}
+@router.post("/register")
+def register(request_data: RegisterRequest):
+    if get_user_by_username(request_data.username):
+        raise HTTPException(status_code=400, detail="Username already exists")
+    if get_user_by_email(request_data.email):
+        raise HTTPException(status_code=400, detail="Email already exists")
+    hashed = hash_password(request_data.password)
+    success = create_user(request_data.username, request_data.email, hashed)
+    if not success:
+        raise HTTPException(status_code=400, detail="Registration failed")
+    return {"message": f"Account created successfully! Welcome {request_data.username}"}
 
+@router.post("/login")
+def login(request_data: LoginRequest):
+    user = get_user_by_username(request_data.username)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    if not verify_password(request_data.password, user["hashed_password"]):
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    token = create_access_token({"user_id": user["id"], "username": user["username"]})
+    return {"access_token": token, "token_type": "bearer", "username": user["username"]}
 @router.post("/upload")
 @limiter.limit("5/minute")
-async def upload_pdf(request: Request, file: UploadFile = File(...)):
+async def upload_pdf(request: Request, file: UploadFile = File(...), payload: dict = Depends(jwt_bearer)):
     logger.info(f"Upload requested: {file.filename}")
 
     if not file.filename.endswith(".pdf"):
@@ -123,7 +149,7 @@ async def upload_pdf(request: Request, file: UploadFile = File(...)):
 
 @router.post("/upload/async")
 @limiter.limit("5/minute")
-async def upload_pdf_async(request: Request, background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def upload_pdf_async(request: Request, background_tasks: BackgroundTasks, file: UploadFile = File(...), payload: dict = Depends(jwt_bearer)):
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
 
@@ -156,7 +182,7 @@ def list_documents():
     return {"documents": sources, "total": len(sources)}
 
 @router.delete("/documents/{filename}")
-def delete_document(filename: str):
+def delete_document(filename: str, payload: dict = Depends(jwt_bearer)):
     existing = chroma_manager.get_by_source(filename)
     if not existing or len(existing["ids"]) == 0:
         return {"message": f"{filename} not found!"}
@@ -165,7 +191,7 @@ def delete_document(filename: str):
 
 @router.post("/ask")
 @limiter.limit("10/minute")
-def ask(request_data: QuestionRequest, request: Request):
+def ask(request_data: QuestionRequest, request: Request, payload: dict = Depends(jwt_bearer)):
     if not request_data.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
 
@@ -228,7 +254,7 @@ def ask(request_data: QuestionRequest, request: Request):
 
 @router.post("/ask/stream")
 @limiter.limit("10/minute")
-async def ask_stream(request_data: QuestionRequest, request: Request):
+async def ask_stream(request_data: QuestionRequest, request: Request, payload: dict = Depends(jwt_bearer)):
     if not request_data.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
 
@@ -276,7 +302,7 @@ Answer:"""
         raise HTTPException(status_code=500, detail=f"Error streaming: {str(e)}")
 
 @router.post("/synthesize")
-def synthesize(request: TopicRequest):
+def synthesize(request: TopicRequest, payload: dict = Depends(jwt_bearer)):
     results, _, _ = retrieval_service.hybrid_search(request.topic, n_results=5)
     context = "\n\n".join([f"[From: {meta['source']}]\n{doc}" for doc, meta in results])
 

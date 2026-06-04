@@ -1,18 +1,14 @@
 import logging
-import os
-import uvicorn
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from dotenv import load_dotenv
-
 from app.api.routes import router, limiter
+from app.db.user_db import init_db
 
 load_dotenv()
 
-# Setup logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
@@ -24,7 +20,6 @@ logging.basicConfig(
 
 app = FastAPI(title="AI Research Assistant")
 
-# Middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -32,12 +27,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Rate limiting
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# API routes
-app.include_router(router)
+@app.on_event("startup")
+async def startup_event():
+    init_db()
 
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+app.include_router(router)

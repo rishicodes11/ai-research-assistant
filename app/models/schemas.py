@@ -31,3 +31,12 @@ class AnswerResponse(BaseModel):
     cached: bool
     faithfulness_score: Optional[float] = None
     faithfulness_reason: Optional[str] = None
+
+class RegisterRequest(BaseModel):
+    username: str
+    email: str
+    password: str
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
