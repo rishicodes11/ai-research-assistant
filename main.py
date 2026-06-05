@@ -1,3 +1,4 @@
+import os
 import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,7 +23,11 @@ app = FastAPI(title="AI Research Assistant")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",      # React frontend locally
+        "http://localhost:8000",      # FastAPI docs locally
+        os.getenv("FRONTEND_URL", "")  # production frontend from .env
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
