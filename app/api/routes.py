@@ -119,7 +119,7 @@ async def upload_pdf(request: Request, file: UploadFile = File(...), payload: di
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
 
     try:
-        existing = chroma_manager.get_by_source(file.filename)
+        existing = chroma_manager.get_by_source(file.filename, user_id=str(payload["user_id"]))
         if existing and len(existing["ids"]) > 0:
             return {"message": f"{file.filename} already exists!", "chunks": len(existing["ids"])}
 
@@ -134,7 +134,7 @@ async def upload_pdf(request: Request, file: UploadFile = File(...), payload: di
 
         chunks = chunking_service.chunk_text(text)
         embeddings = embedding_service.get_embeddings_batch(chunks)
-        chroma_manager.add_chunks(chunks, embeddings, file.filename)
+        chroma_manager.add_chunks(chunks, embeddings, file.filename, user_id=str(payload["user_id"]))
         retrieval_service.invalidate_cache()
         summary = llm_service.summarize(text)
 
@@ -153,7 +153,7 @@ async def upload_pdf_async(request: Request, background_tasks: BackgroundTasks, 
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are allowed")
 
-    existing = chroma_manager.get_by_source(file.filename)
+    existing = chroma_manager.get_by_source(file.filename, user_id=str(payload["user_id"]))
     if existing and len(existing["ids"]) > 0:
         return {"message": f"{file.filename} already exists!", "status": "duplicate"}
 
@@ -174,8 +174,8 @@ def get_job_status(job_id: str):
     return processing_jobs[job_id]
 
 @router.get("/documents")
-def list_documents():
-    results = chroma_manager.get_all()
+def list_documents(payload: dict = Depends(jwt_bearer)):
+    results = chroma_manager.get_all(user_id=str(payload["user_id"]))
     if not results["ids"]:
         return {"documents": []}
     sources = list(set([meta["source"] for meta in results["metadatas"]]))
@@ -183,10 +183,10 @@ def list_documents():
 
 @router.delete("/documents/{filename}")
 def delete_document(filename: str, payload: dict = Depends(jwt_bearer)):
-    existing = chroma_manager.get_by_source(filename)
+    existing = chroma_manager.get_by_source(filename, user_id=str(payload["user_id"]))
     if not existing or len(existing["ids"]) == 0:
         return {"message": f"{filename} not found!"}
-    chroma_manager.delete_by_source(filename)
+    chroma_manager.delete_by_source(filename, user_id=str(payload["user_id"]))
     return {"message": f"{filename} deleted successfully!"}
 
 @router.post("/ask")
@@ -204,7 +204,7 @@ def ask(request_data: QuestionRequest, request: Request, payload: dict = Depends
 
     try:
         rewritten = llm_service.rewrite_query(request_data.question, chat_histories[request_data.session_id])
-        results, confidence, confidence_score = retrieval_service.hybrid_search(rewritten)
+        results, confidence, confidence_score = retrieval_service.hybrid_search(rewritten, user_id=str(payload["user_id"]))
 
         if not results:
             raise HTTPException(status_code=404, detail="No documents found. Please upload a PDF first")
@@ -260,7 +260,7 @@ async def ask_stream(request_data: QuestionRequest, request: Request, payload: d
 
     try:
         rewritten = llm_service.rewrite_query(request_data.question, chat_histories[request_data.session_id])
-        results, confidence, confidence_score = retrieval_service.hybrid_search(rewritten)
+        results, confidence, confidence_score = retrieval_service.hybrid_search(rewritten, user_id=str(payload["user_id"]))
 
         if not results:
             raise HTTPException(status_code=404, detail="No documents found")
@@ -303,7 +303,7 @@ Answer:"""
 
 @router.post("/synthesize")
 def synthesize(request: TopicRequest, payload: dict = Depends(jwt_bearer)):
-    results, _, _ = retrieval_service.hybrid_search(request.topic, n_results=5)
+    results, _, _ = retrieval_service.hybrid_search(request.topic, n_results=5, user_id=str(payload["user_id"]))
     context = "\n\n".join([f"[From: {meta['source']}]\n{doc}" for doc, meta in results])
 
     prompt = f"""You are a research assistant. Generate a structured synthesis.
