@@ -1,123 +1,107 @@
 # AI Research Assistant
 
-A production-grade RAG (Retrieval Augmented Generation) system for querying and synthesizing information from research documents.
+A production-grade RAG system that lets you upload research papers and ask questions about them.
 
-## Overview
+Built with FastAPI, ChromaDB, and LLaMA 3.3 70B via Groq.
 
-Upload PDF documents and ask questions against them. The system retrieves relevant context using hybrid search and generates grounded, cited answers using an LLM.
-
-## Architecture
-
-```
-┌─────────────┐    ┌──────────────┐    ┌──────────┐    ┌───────────┐    ┌────────────────┐
-│  PDF Upload │───▶│ Text Extract │───▶│ Chunking │───▶│ Embedding │───▶│ Vector Storage │
-└─────────────┘    └──────────────┘    └──────────┘    └───────────┘    └────────────────┘
-                                                                                  │
-                                                                                  ▼
-┌─────────────┐    ┌───────────────┐    ┌───────────────┐    ┌──────────┐    ┌──────────┐
-│ Cited Answer│◀───│      LLM      │◀───│   Reranking   │◀───│  Hybrid  │◀───│  Query   │
-└─────────────┘    └───────────────┘    └───────────────┘    │  Search  │    │ Rewrite  │
-                                                              └──────────┘    └──────────┘
-```
+---
 
 ## Features
 
-- **Hybrid Search** — combines BM25 keyword search and semantic embeddings for superior retrieval
-- **Cross-encoder Reranking** — reranks top 10 candidates to return the 3 most relevant chunks
-- **Query Rewriting** — rewrites ambiguous queries using conversation history before retrieval
-- **Confidence Scoring** — sigmoid-normalized relevance score for every answer
-- **Streaming Responses** — token-by-token streaming via `/ask/stream`
-- **Async PDF Processing** — background processing with job status tracking
-- **Chat History** — session-based conversation memory
-- **Answer Caching** — MD5-keyed cache to avoid redundant LLM calls
-- **Evaluation System** — Precision@K, MRR, and NDCG metrics via `evaluate.py`
-- **Rate Limiting** — 10 req/min on `/ask`, 5 req/min on `/upload`
-- **Persistent Storage** — ChromaDB with disk persistence across restarts
-- **Auto Document Summary** — LLM-generated summary on every upload
+- JWT authentication with multi-user document isolation
+- Hybrid search (BM25 + semantic) with cross-encoder reranking
+- Streaming responses with citation support
+- Hallucination detection with faithfulness scoring
+- Async PDF processing with job status tracking
+- Docker support for single command deployment
 
-## Tech Stack
+---
 
-| Component | Technology |
-|-----------|------------|
-| API Framework | FastAPI |
-| Vector Database | ChromaDB |
-| Embeddings | sentence-transformers (all-MiniLM-L6-v2) |
-| Reranker | CrossEncoder (ms-marco-MiniLM-L-6-v2) |
-| Keyword Search | BM25Okapi (rank-bm25) |
-| LLM | Groq (llama-3.3-70b-versatile) |
-| Text Splitting | LangChain RecursiveCharacterTextSplitter |
+## Quick Start
 
-## Setup
+### With Docker
 
 ```bash
 git clone https://github.com/rishicodes11/ai-research-assistant
 cd ai-research-assistant
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+cp .env.example .env
+docker compose up
 ```
 
-Create a `.env` file:
-```
-GROQ_API_KEY=your_groq_key_here
-```
+### Without Docker
 
-Run the server:
 ```bash
+git clone https://github.com/rishicodes11/ai-research-assistant
+cd ai-research-assistant
+pip install -r requirements.txt
+cp .env.example .env
 uvicorn main:app --reload
 ```
 
-API docs available at `http://localhost:8000/docs`
+---
+
+## Environment Variables
+
+```
+GROQ_API_KEY=    # required — get from console.groq.com
+SECRET_KEY=      # required — any random string for JWT signing
+FRONTEND_URL=    # optional — your frontend URL for CORS
+HF_TOKEN=        # optional — HuggingFace token for faster downloads
+```
+
+---
 
 ## API Endpoints
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/health` | Server health and stats |
-| POST | `/upload` | Upload and process PDF |
-| POST | `/upload/async` | Upload PDF with background processing |
-| GET | `/status/{job_id}` | Check async job status |
-| GET | `/documents` | List all uploaded documents |
-| DELETE | `/documents/{filename}` | Delete a document |
-| POST | `/ask` | Ask a question with citations |
-| POST | `/ask/stream` | Streaming question answering |
-| POST | `/synthesize` | Generate structured research synthesis |
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| POST | /register | No | Create account |
+| POST | /login | No | Get JWT token |
+| POST | /upload | Yes | Upload PDF |
+| POST | /upload/async | Yes | Upload PDF in background |
+| GET | /status/{job_id} | No | Check upload status |
+| POST | /ask | Yes | Ask a question |
+| POST | /ask/stream | Yes | Streaming answer |
+| POST | /synthesize | Yes | Research synthesis |
+| GET | /documents | Yes | List your documents |
+| DELETE | /documents/{filename} | Yes | Delete a document |
+| GET | /health | No | Server health |
 
-## Evaluation
+---
 
-Run the evaluation suite:
-```bash
-python3 evaluate.py
-```
+## Tech Stack
 
-Current scores on test suite:
-- Mean Precision@3: 0.67
-- Mean MRR: 0.70
-- Mean NDCG@3: 0.65
+| Component | Technology |
+|---|---|
+| Backend | FastAPI |
+| LLM | LLaMA 3.3 70B via Groq |
+| Embeddings | BAAI/bge-base-en-v1.5 (768-dim) |
+| Vector DB | ChromaDB |
+| Keyword Search | BM25 (rank-bm25) |
+| Reranker | CrossEncoder ms-marco-MiniLM-L-6-v2 |
+| Auth | JWT (python-jose) + bcrypt |
+| User DB | SQLite |
+| Container | Docker + Docker Compose |
+
+---
 
 ## Project Structure
 
 ```
-research-assistant/
-├── main.py                  # FastAPI app entry point
-├── requirements.txt         # Dependencies
-├── Procfile                 # Railway deployment config
-├── .env.example             # Environment variable reference
-├── evaluate.py              # IR evaluation metrics
-└── app/
-    ├── api/
-    │   └── routes.py        # All API endpoints
-    ├── services/
-    │   ├── embedding_service.py   # Sentence transformer embeddings
-    │   ├── retrieval_service.py   # Hybrid search (BM25 + semantic)
-    │   ├── rerank_service.py      # Cross-encoder reranking
-    │   └── llm_service.py         # Groq LLM calls
-    ├── db/
-    │   └── chroma_manager.py      # ChromaDB operations
-    ├── models/
-    │   └── schemas.py             # Pydantic request/response models
-    ├── utils/
-    │   └── chunking.py            # Text chunking
-    └── evaluation/
-        └── metrics.py             # Precision@K, MRR, NDCG
+app/
+├── api/routes.py              # All API endpoints
+├── services/
+│   ├── embedding_service.py   # Text embeddings
+│   ├── retrieval_service.py   # Hybrid search
+│   ├── rerank_service.py      # Cross-encoder reranking
+│   └── llm_service.py         # LLM calls + faithfulness check
+├── db/
+│   ├── chroma_manager.py      # ChromaDB vector database
+│   └── user_db.py             # SQLite user management
+├── auth/
+│   ├── auth_handler.py        # JWT token creation/verification
+│   └── auth_bearer.py         # FastAPI route protection
+├── models/schemas.py          # Pydantic request/response models
+├── utils/chunking.py          # Recursive text chunking
+└── evaluation/metrics.py      # Precision@K, MRR, NDCG
 ```
