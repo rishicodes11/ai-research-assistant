@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 papers/
 chroma_db/
+users.db
+app.log
